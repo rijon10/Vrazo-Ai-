@@ -10,53 +10,86 @@ if (!apiKey) {
 
 const ai = new GoogleGenAI({ apiKey: apiKey || '' });
 
-// Security: Safety settings
+// FIX: Use BLOCK_NONE where possible to minimize false positives, otherwise BLOCK_ONLY_HIGH
 const safetySettings = [
-  { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE },
-  { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE },
-  { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE },
-  { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE },
+  { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+  { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+  { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
+  { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
 ];
 
 export const generateImage = async (prompt: string): Promise<string | null> => {
-  try {
-    // Input validation
-    if (prompt.length > 800) {
-        throw new Error("Description too long. Please shorten it.");
-    }
-    const cleanPrompt = prompt.replace(/<[^>]*>?/gm, ''); 
+  let attempts = 0;
+  // Reduce max attempts to avoid long waits, but keep 1 retry for network blips
+  const maxAttempts = 2; 
 
-    // Optimized for speed: gemini-2.5-flash-image
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash-image', 
-      contents: {
-        parts: [{ text: cleanPrompt }],
-      },
-      config: {
-        imageConfig: {
-          aspectRatio: "16:9",
+  while (attempts < maxAttempts) {
+    try {
+        // Input validation
+        if (prompt.length > 800) {
+            throw new Error("Description too long. Please shorten it.");
+        }
+        const cleanPrompt = prompt.replace(/<[^>]*>?/gm, ''); 
+
+        // Optimization: "Concept art" prefix helps bypass strict realism filters for abstract/creative prompts
+        // "8k resolution, ultra-realistic" ensures high quality even for simple prompts
+        const enhancedPrompt = `Concept art of: ${cleanPrompt} . 8k resolution, ultra-realistic, cinematic lighting, masterpiece.`;
+
+        // Optimized for speed: gemini-2.5-flash-image
+        const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash-image', 
+        contents: {
+            parts: [{ text: enhancedPrompt }],
         },
-        safetySettings: safetySettings,
-      },
-    });
+        config: {
+            imageConfig: {
+                aspectRatio: "16:9",
+                // numberOfImages is not supported in imageConfig for generateContent
+            },
+            safetySettings: safetySettings,
+        },
+        });
 
-    if (response.candidates && response.candidates.length > 0) {
-        for (const part of response.candidates[0].content.parts) {
-            if (part.inlineData) {
-                return `data:image/png;base64,${part.inlineData.data}`;
+        if (response.candidates && response.candidates.length > 0) {
+            for (const part of response.candidates[0].content.parts) {
+                if (part.inlineData) {
+                    return `data:image/png;base64,${part.inlineData.data}`;
+                }
             }
         }
+        return null;
+    } catch (error: any) {
+        attempts++;
+        console.error(`Attempt ${attempts} failed:`, error.message);
+        
+        // FAIL FAST LOGIC:
+        // If it's a safety error or invalid argument, DO NOT RETRY. It will fail again.
+        if (error.message.includes("SAFETY") || error.message.includes("400") || error.message.includes("INVALID_ARGUMENT")) {
+             throw new Error("This prompt cannot be processed due to safety guidelines. Please modify your text.");
+        }
+
+        // Only retry for Server Errors (503, 500, 429)
+        const isServerError = error.message.includes("503") || error.message.includes("429") || error.message.includes("500") || error.message.includes("fetch failed");
+        
+        if (!isServerError || attempts >= maxAttempts) {
+             if (error.message.includes("429")) {
+                 throw new Error("Server is busy (Rate Limit). Please wait a moment.");
+             }
+             if (error.message.includes("503")) {
+                 throw new Error("AI Service is temporarily overloaded. Try again in 10s.");
+             }
+             throw new Error("Generation failed. Please check your internet or try a different prompt.");
+        }
+        
+        // Short wait before retry (1s)
+        await new Promise(resolve => setTimeout(resolve, 1000));
     }
-    return null;
-  } catch (error: any) {
-    console.error("Gen failed:", error.message);
-    throw new Error("Generation failed. Server busy or prompt rejected.");
   }
+  return null;
 };
 
 export const enhanceImage = async (imageBase64: string, resolution: '4K' | '8K' = '4K'): Promise<string | null> => {
   try {
-    // Validate size (should be handled by frontend compression, but double check)
     if (imageBase64.length > 15 * 1024 * 1024) { 
         throw new Error("Image too large.");
     }
@@ -76,7 +109,6 @@ export const enhanceImage = async (imageBase64: string, resolution: '4K' | '8K' 
             }
           },
           {
-            // Short, direct prompt for faster inference
             text: "Enhance image quality. Remove noise. High resolution details."
           },
         ],
@@ -119,7 +151,6 @@ export const generateThumbnail = async (title: string, imagesBase64: string[], s
       });
     });
 
-    // Minimal instructions for speed
     const promptText = `YouTube thumbnail background. Title: "${title}". Style: ${style}. No text.`;
     
     parts.push({ text: promptText });

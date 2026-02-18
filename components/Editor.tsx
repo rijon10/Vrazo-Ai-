@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { ArrowLeft, Download, Upload, Sparkles, ScanLine, Loader2, ArrowRight, Zap, Gem } from 'lucide-react';
+import { ArrowLeft, Download, Upload, Sparkles, ScanLine, Loader2, ArrowRight, Zap, Gem, AlertTriangle } from 'lucide-react';
 import { enhanceImage } from '../services/geminiService';
 import { Project } from '../types';
 
@@ -11,26 +11,58 @@ interface EditorProps {
   onConsumeCredit: () => void;
 }
 
+// Compress image util (duplicated for Editor isolation)
+const compressImage = (file: File): Promise<string> => {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target?.result as string;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const MAX_WIDTH = 1024; // Resize for speed
+        const scaleSize = MAX_WIDTH / img.width;
+        if (scaleSize < 1) {
+            canvas.width = MAX_WIDTH;
+            canvas.height = img.height * scaleSize;
+        } else {
+            canvas.width = img.width;
+            canvas.height = img.height;
+        }
+        const ctx = canvas.getContext('2d');
+        ctx?.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL('image/jpeg', 0.8));
+      };
+    };
+  });
+};
+
 const Editor: React.FC<EditorProps> = ({ project, onBack, onCheckLimit, onConsumeCredit }) => {
   const [originalImage, setOriginalImage] = useState<string | null>(project?.thumbnail || null);
   const [enhancedImage, setEnhancedImage] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [resolution, setResolution] = useState<'4K' | '8K'>('4K');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setOriginalImage(reader.result as string);
-        setEnhancedImage(null); // Reset result
-      };
-      reader.readAsDataURL(file);
+      try {
+        const compressed = await compressImage(file);
+        setOriginalImage(compressed);
+        setEnhancedImage(null);
+        setError(null);
+      } catch (err) {
+        console.error(err);
+        setError("Failed to load image");
+      }
     }
   };
 
   const handleEnhance = async () => {
+    setError(null);
     // Check limit before starting
     if (!onCheckLimit()) return;
     
@@ -42,10 +74,12 @@ const Editor: React.FC<EditorProps> = ({ project, onBack, onCheckLimit, onConsum
       if (result) {
         setEnhancedImage(result);
         onConsumeCredit(); // Consume credit only on success
+      } else {
+          setError("Failed to enhance. Please try again or use a different photo.");
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
-      alert("Failed to enhance image. Please try again.");
+      setError(e.message || "Something went wrong during enhancement.");
     } finally {
       setIsProcessing(false);
     }
@@ -113,7 +147,7 @@ const Editor: React.FC<EditorProps> = ({ project, onBack, onCheckLimit, onConsum
                 <div className="relative rounded-xl overflow-hidden border border-slate-700 bg-slate-950 aspect-video">
                   <img src={originalImage} className="w-full h-full object-contain opacity-80" alt="Original" />
                   <button 
-                     onClick={() => {setOriginalImage(null); setEnhancedImage(null);}}
+                     onClick={() => {setOriginalImage(null); setEnhancedImage(null); setError(null);}}
                      className="absolute top-2 right-2 p-1 bg-black/50 rounded-full hover:bg-black/70 text-white"
                   >
                      <ScanLine size={16} />
@@ -135,6 +169,11 @@ const Editor: React.FC<EditorProps> = ({ project, onBack, onCheckLimit, onConsum
                         </div>
                     ) : enhancedImage ? (
                         <img src={enhancedImage} className="w-full h-full object-contain" alt="Enhanced" />
+                    ) : error ? (
+                        <div className="text-red-400 text-sm flex flex-col items-center p-4 text-center">
+                            <AlertTriangle size={24} className="mb-2 text-red-500" />
+                            {error}
+                        </div>
                     ) : (
                         <div className="text-slate-600 text-sm flex flex-col items-center">
                             <ArrowRight size={24} className="mb-2 rotate-90 md:rotate-0" />

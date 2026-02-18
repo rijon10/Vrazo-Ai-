@@ -4,17 +4,79 @@ import BottomNav from './components/BottomNav';
 import Dashboard from './components/Dashboard';
 import Editor from './components/Editor';
 import { generateImage, generateThumbnail } from './services/geminiService';
-import { Loader2, X, Upload, Image as ImageIcon, Search, Sliders, ChevronRight, User, Bell, Database, HelpCircle, LogOut, Trash2, Sparkles, ArrowDown, Download, Type, Lock, MessageCircle, Phone, Flame, Zap, Heart } from 'lucide-react';
+import { Loader2, X, Upload, Image as ImageIcon, Search, Sliders, ChevronRight, User, Bell, Database, HelpCircle, LogOut, Trash2, Sparkles, ArrowDown, Download, Type, Lock, MessageCircle, Phone, Flame, Zap, Heart, CheckCircle, AlertCircle } from 'lucide-react';
 
 // CONSTANTS
 const MAX_DAILY_FREE = 3;
-// Premium Avatar - High Quality Cinematic Portrait (Eye-catching, Stylish, Attractive)
 const USER_AVATAR = "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=200&h=200&fit=crop&q=80"; 
+
+// --- UTILS ---
+// Compress image to speed up API upload
+const compressImage = (file: File): Promise<string> => {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target?.result as string;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const MAX_WIDTH = 1024; // Resize large images to max 1024px width for speed
+        const scaleSize = MAX_WIDTH / img.width;
+        if (scaleSize < 1) {
+            canvas.width = MAX_WIDTH;
+            canvas.height = img.height * scaleSize;
+        } else {
+            canvas.width = img.width;
+            canvas.height = img.height;
+        }
+        const ctx = canvas.getContext('2d');
+        ctx?.drawImage(img, 0, 0, canvas.width, canvas.height);
+        // Export as JPEG 0.8 quality
+        resolve(canvas.toDataURL('image/jpeg', 0.8));
+      };
+    };
+  });
+};
+
+// TOAST COMPONENT
+const Toast = ({ message, type, onClose }: { message: string, type: 'success' | 'error' | 'info', onClose: () => void }) => {
+  useEffect(() => {
+    const timer = setTimeout(onClose, 3000);
+    return () => clearTimeout(timer);
+  }, [onClose]);
+
+  const bgColors = {
+    success: 'bg-emerald-600',
+    error: 'bg-red-600',
+    info: 'bg-blue-600'
+  };
+
+  const icons = {
+    success: <CheckCircle size={18} />,
+    error: <AlertCircle size={18} />,
+    info: <Bell size={18} />
+  };
+
+  return (
+    <div className={`fixed bottom-24 left-1/2 transform -translate-x-1/2 flex items-center space-x-2 px-4 py-3 rounded-full shadow-xl z-[100] animate-fade-in text-white ${bgColors[type]}`}>
+      {icons[type]}
+      <span className="text-sm font-medium">{message}</span>
+    </div>
+  );
+};
 
 const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<ViewState>('home');
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [initialEditorTool, setInitialEditorTool] = useState<string | undefined>(undefined);
+  
+  // Notification State
+  const [toast, setToast] = useState<{message: string, type: 'success' | 'error' | 'info'} | null>(null);
+
+  const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    setToast({ message, type });
+  };
   
   // Usage Limits State
   const [dailyCount, setDailyCount] = useState(0);
@@ -49,11 +111,10 @@ const App: React.FC = () => {
   const fileInput2Ref = useRef<HTMLInputElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  // Trending / Explore Data - Final Fix for Images
+  // Trending / Explore Data
   const trendingItems = [
     {
         id: 1,
-        // Cyberpunk Samurai - Using a reliable neon/cyberpunk aesthetic image
         image: "https://images.unsplash.com/photo-1515630278258-407f66498911?q=80&w=600&auto=format&fit=crop",
         title: "Cyberpunk Samurai",
         category: "Cyberpunk",
@@ -82,7 +143,6 @@ const App: React.FC = () => {
     },
     {
         id: 5,
-        // Neon Logo - Fixed with a proper neon mascot/face image
         image: "https://images.unsplash.com/photo-1615966650071-855b15f29ad1?q=80&w=600&auto=format&fit=crop",
         title: "Neon Lion Logo",
         category: "Logos",
@@ -90,7 +150,6 @@ const App: React.FC = () => {
     },
     {
         id: 6,
-        // Neon City - Using a very popular Tokyo night image
         image: "https://images.unsplash.com/photo-1480796927426-f609979314bd?q=80&w=600&auto=format&fit=crop",
         title: "Neon City",
         category: "Cyberpunk",
@@ -98,7 +157,6 @@ const App: React.FC = () => {
     },
     {
         id: 7,
-        // Neon Gaming Room - Using a reliable gaming setup image
         image: "https://images.unsplash.com/photo-1600861194942-f883de0dfe96?q=80&w=600&auto=format&fit=crop",
         title: "Neon Gaming Room",
         category: "3D",
@@ -186,8 +244,9 @@ const App: React.FC = () => {
 
   // --- DELETE LOGIC ---
   const handleDeleteProject = (projectId: string) => {
-    if (window.confirm("Are you sure you want to delete this project?")) {
+    if (window.confirm("Delete this project?")) {
       setProjects(prevProjects => prevProjects.filter(p => p.id !== projectId));
+      showToast("Project deleted", "success");
     }
   };
 
@@ -197,8 +256,6 @@ const App: React.FC = () => {
     setPrompt(''); // Always clear prompt value first
     if (initialPrompt) {
         setSuggestedPrompt(initialPrompt);
-        // FIX: Do NOT set prompt value here. User wants it as placeholder only.
-        // setPrompt(initialPrompt); 
     } else {
         setSuggestedPrompt(null);
     }
@@ -211,7 +268,10 @@ const App: React.FC = () => {
     // Use prompt if user typed, otherwise use suggestedPrompt
     const finalPrompt = prompt || suggestedPrompt;
     
-    if (!finalPrompt) return;
+    if (!finalPrompt) {
+        showToast("Please describe what you want to create", "error");
+        return;
+    }
     
     setIsGenerating(true);
     try {
@@ -219,10 +279,13 @@ const App: React.FC = () => {
       if (base64Image) {
         setGeneratedImage(base64Image);
         incrementUsage(); // Deduct credit on success
+        showToast("Image generated successfully!", "success");
+      } else {
+        showToast("Could not generate image. Try again.", "error");
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
-      alert('Failed to generate. Please try again.');
+      showToast(e.message || "Generation failed.", "error");
     } finally {
       setIsGenerating(false);
     }
@@ -236,9 +299,11 @@ const App: React.FC = () => {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    showToast("Image saved to gallery", "success");
   };
 
   const handleDownloadUrl = async (url: string, filename: string) => {
+      showToast("Downloading...", "info");
       try {
         const response = await fetch(url);
         const blob = await response.blob();
@@ -251,6 +316,7 @@ const App: React.FC = () => {
         link.click();
         document.body.removeChild(link);
         window.URL.revokeObjectURL(blobUrl);
+        showToast("Download complete", "success");
       } catch (error) {
           console.error("Download failed, trying direct link", error);
           // Fallback
@@ -270,21 +336,30 @@ const App: React.FC = () => {
       setIsThumbModalOpen(true);
   }
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>, setImage: (s: string) => void) => {
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>, setImage: (s: string) => void) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setImage(reader.result as string);
-      };
-      reader.readAsDataURL(file);
+      // Basic validation
+      if(file.size > 10 * 1024 * 1024) {
+          showToast("Image too large (Max 10MB)", "error");
+          return;
+      }
+      
+      try {
+          // Compress before setting state
+          const compressed = await compressImage(file);
+          setImage(compressed);
+      } catch(err) {
+          console.error(err);
+          showToast("Failed to load image", "error");
+      }
     }
   };
 
   const handleGenerateThumbnail = async () => {
     if (!checkLimit()) return;
     if (!thumbTitle) {
-      alert("Please enter a title");
+      showToast("Please enter a video title", "error");
       return;
     }
     
@@ -301,10 +376,13 @@ const App: React.FC = () => {
       if (base64Image) {
         setGeneratedImage(base64Image);
         incrementUsage(); // Deduct credit
+        showToast("Thumbnail created!", "success");
+      } else {
+        showToast("Failed to create thumbnail.", "error");
       }
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
-      alert('Failed to generate thumbnail.');
+      showToast(e.message || "Failed to generate thumbnail.", "error");
     } finally {
       setIsGenerating(false);
     }
@@ -353,6 +431,7 @@ const App: React.FC = () => {
           document.body.appendChild(link);
           link.click();
           document.body.removeChild(link);
+          showToast("Thumbnail downloaded!", "success");
       };
       img.src = generatedImage;
   };
@@ -379,6 +458,7 @@ const App: React.FC = () => {
     setProjects([newProject, ...projects]);
     closeModals();
     setCurrentView('home');
+    showToast("Project saved successfully", "success");
   };
 
   const closeModals = () => {
@@ -396,6 +476,9 @@ const App: React.FC = () => {
       
       {/* Hidden Canvas */}
       <canvas ref={canvasRef} className="hidden" />
+
+      {/* Toast Notification */}
+      {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
 
       <main className={`min-h-screen ${currentView !== 'editor' ? 'pb-20' : ''}`}>
         
@@ -436,6 +519,7 @@ const App: React.FC = () => {
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
                         placeholder="Search prompts & styles..." 
+                        maxLength={50} // Security: prevent long inputs
                         className="bg-transparent outline-none text-white w-full placeholder:text-slate-500" 
                     />
                     {searchQuery ? (
@@ -620,6 +704,7 @@ const App: React.FC = () => {
                 <textarea
                   value={prompt}
                   onChange={(e) => setPrompt(e.target.value)}
+                  maxLength={500} // Security Limit
                   placeholder={suggestedPrompt ? suggestedPrompt : "Describe what you want to create..."}
                   className="w-full h-32 bg-slate-900 border border-slate-700 rounded-xl p-4 text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none mb-4"
                 />
@@ -657,7 +742,7 @@ const App: React.FC = () => {
               <div className="space-y-4">
                 <div>
                   <label className="block text-xs font-semibold text-slate-400 mb-1 uppercase tracking-wide">Video Title</label>
-                  <input type="text" value={thumbTitle} onChange={(e) => setThumbTitle(e.target.value)} placeholder="e.g., I SURVIVED 100 Days..." className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                  <input type="text" value={thumbTitle} maxLength={80} onChange={(e) => setThumbTitle(e.target.value)} placeholder="e.g., I SURVIVED 100 Days..." className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-white placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500" />
                 </div>
                 <div>
                    <label className="block text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wide">Thumbnail Style</label>
@@ -700,8 +785,8 @@ const App: React.FC = () => {
                 </div>
                 <div className="bg-slate-900 border border-slate-700 rounded-xl p-3 space-y-3">
                    <div className="flex items-center space-x-2 text-slate-400 mb-1"><Type size={16} /><span className="text-xs font-bold uppercase">Add Text Overlay</span></div>
-                   <input type="text" value={thumbHeadline} onChange={(e) => setThumbHeadline(e.target.value)} placeholder="MAIN HEADLINE" className="w-full bg-slate-800 border border-slate-700 rounded-lg p-2 text-sm text-yellow-400 font-bold placeholder:text-slate-600 focus:outline-none" />
-                   <input type="text" value={thumbSubtext} onChange={(e) => setThumbSubtext(e.target.value)} placeholder="Subtext (optional)" className="w-full bg-slate-800 border border-slate-700 rounded-lg p-2 text-sm text-white font-bold placeholder:text-slate-600 focus:outline-none" />
+                   <input type="text" value={thumbHeadline} maxLength={50} onChange={(e) => setThumbHeadline(e.target.value)} placeholder="MAIN HEADLINE" className="w-full bg-slate-800 border border-slate-700 rounded-lg p-2 text-sm text-yellow-400 font-bold placeholder:text-slate-600 focus:outline-none" />
+                   <input type="text" value={thumbSubtext} maxLength={50} onChange={(e) => setThumbSubtext(e.target.value)} placeholder="Subtext (optional)" className="w-full bg-slate-800 border border-slate-700 rounded-lg p-2 text-sm text-white font-bold placeholder:text-slate-600 focus:outline-none" />
                 </div>
                 <div className="flex space-x-3">
                   <button onClick={() => setGeneratedImage(null)} className="px-4 py-3 bg-slate-700 hover:bg-slate-600 rounded-xl font-medium transition-colors">Back</button>
